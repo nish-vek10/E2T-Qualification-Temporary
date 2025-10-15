@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>E2T Country Allocation</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <link href="https://api.fontshare.com/v2/css?f[]=switzer@400,500,600,700,800,900&display=swap" rel="stylesheet">
+  <style>
+    :root { color-scheme: dark; }
+    body { margin:0; background:#0b0b0b; color:#eaeaea;
+      font-family:"Switzer",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,"Helvetica Neue",sans-serif; }
+    .wrap { max-width:900px; margin:24px auto; padding:0 16px; }
+    h1 { text-align:center; font-weight:900; margin:8px 0 6px; letter-spacing:.5px; text-transform:uppercase; }
+    .sub { text-align:center; color:#aaa; margin-bottom:16px; }
+    .list { display:grid; gap:14px; }
+    .card { background:#121212; border:1px solid #2a2a2a; border-radius:16px; padding:14px;
+            display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; }
+    .rowL { display:grid; gap:10px; }
+    .top { display:flex; align-items:center; gap:10px; font-weight:800; }
+    .flag { width:38px; height:28px; object-fit:cover; border-radius:3px; box-shadow:0 0 3px rgba(0,0,0,.6); background:#111; }
+    .bar { height:10px; border-radius:999px; background:#2a2a2a; overflow:hidden; }
+    .fill { height:100%; background:linear-gradient(90deg,#20c997,#14b8a6); }
+    .cap { font-size:12.5px; color:#cfcfcf; }
+    .right { display:grid; gap:8px; justify-items:end; }
+    .pill { padding:6px 12px; border-radius:999px; font-weight:800; font-size:12.5px;
+            border:1px solid #2a2a2a; background:#181818; color:#cfcfcf; }
+    .pill.ok { border-color:rgba(52,199,89,.5); background:rgba(52,199,89,.12); color:#34c759; }
+    .pct { font-weight:900; font-size:18px; }
+    .err { color:#ff6b6b; background:#1b0b0b; border:1px solid #3a1a1a; padding:10px 12px; border-radius:8px; }
+    @media (max-width:640px){ .wrap{ margin:16px auto; } }
+  </style>
+</head>
+<body>
+  <div id="app" class="wrap">Loading…</div>
+
+<script type="module">
+  const root = document.querySelector("#app");
+  const showError = (msg) => {
+    root.innerHTML = `<div class="wrap"><h1>Country Allocation Progress</h1>
+      <div class="err">Error: ${msg}</div></div>`;
+  };
+
+  // ---- flags with hard-coded fallbacks (ensures every flag renders) ----
+  const countriesPkg = await import("https://esm.sh/i18n-iso-countries@7.14.0");
+  const countries = countriesPkg.default || countriesPkg;
+  const MAP = {
+    "united kingdom":"gb","great britain":"gb","britain":"gb","gb":"gb","uk":"gb","u.k.":"gb",
+    "united states of america":"us","united states":"us","usa":"us","us":"us","u.s.a.":"us",
+    "india":"in","nigeria":"ng","south africa":"za","israel":"il","cameroon":"cm",
+    "swaziland":"sz","eswatini":"sz",
+    "côte d'ivoire":"ci","cote d'ivoire":"ci","ivory coast":"ci",
+    "russian federation":"ru","russia":"ru",
+    "kyrgyz republic":"kg","kyrgyzstan":"kg",
+    "czech republic":"cz","czechia":"cz",
+    "palestine, state of":"ps","palestine":"ps",
+    "lao people's democratic republic":"la","laos":"la",
+    "tanzania": "tz",
+    "tanzania united republic of": "tz",
+    "united republic of tanzania": "tz",
+    "viet nam":"vn","vietnam":"vn"
+  };
+  function toAlpha2(name){
+    if(!name) return null;
+    const raw=String(name).trim(); const key=raw.toLowerCase();
+    if(MAP[key]) return MAP[key];
+    const cleaned=raw.replace(/[().]/g,"").replace(/\s+/g," ").trim();
+    const ck=cleaned.toLowerCase(); if(MAP[ck]) return MAP[ck];
+    const lib = countries.getAlpha2Code(raw,"en") || countries.getAlpha2Code(cleaned,"en");
+    return lib ? lib.toLowerCase() : null;
+  }
+  const flagImg = (country) => {
+    const code = toAlpha2(country);
+    return code ? `<img class="flag" src="https://flagcdn.com/w40/${code}.png" alt="${country||""}">` : "";
+  };
+
+  const fmtPct = (v) => (Number(v)||0).toFixed(1) + "%";
+  const isTrue = (v) => v === true || v === 1 || String(v).toLowerCase() === "t" || String(v).toLowerCase() === "true";
+
+  // ---- percent parser: handle "10.45%" strings or compute from total_plan ----
+  const GOAL_TOTAL = 1_000_000; // US$1,000,000
+  function numFromAny(x){
+    if (typeof x === "number") return x;
+    if (typeof x === "string"){
+      const m = x.match(/-?\d+(\.\d+)?/); // grab number part even if '%'
+      if (m) return parseFloat(m[0]);
+    }
+    return NaN;
+  }
+  function pctFromRow(r){
+    // try pct_goal
+    let p = numFromAny(r.pct_goal);
+    if (!Number.isFinite(p)){
+      // fallback: compute from total_plan
+      const tp = numFromAny(r.total_plan);
+      if (Number.isFinite(tp) && GOAL_TOTAL > 0) p = (tp / GOAL_TOTAL) * 100;
+    }
+    if (!Number.isFinite(p)) p = 0;
+    return Math.max(0, Math.min(100, p));
+  }
+
+  // ===== Supabase (TEMP project / table) =====
+  const SUPABASE_URL  = "https://vdtuneabmsvfmfopmpdc.supabase.co";
+  const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZkdHVuZWFibXN2Zm1mb3BtcGRjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkyNDQ1ODgsImV4cCI6MjA3NDgyMDU4OH0.gRuI2YURZdBWwsWsuFmpfwFcdoU5aJoE369fnF-HOLo";
+
+  // Pull ALL needed columns so our fallback works
+  const url = `${SUPABASE_URL}/rest/v1/country_allocation_temporary?select=country,total_plan,pct_goal,is_qualified,status&order=total_plan.desc`;
+
+  try {
+    const res = await fetch(url, {
+      headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${SUPABASE_ANON}` }
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    const rows = await res.json();
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      root.innerHTML = `<div class="wrap"><h1>WORLD CUP QUALIFICATION</h1>
+        <div class="sub">Towards US$1,000,000 goal • Live stats</div><p>No data.</p></div>`;
+    } else {
+      let html = `<div class="wrap">
+        <h1>WORLD CUP QUALIFICATION</h1>
+        <div class="sub">Towards US$1,000,000 goal  •  Live stats</div>
+        <div class="list">`;
+      for (const r of rows) {
+        const pct = pctFromRow(r);
+        const qualified = isTrue(r.is_qualified);
+        html += `
+          <div class="card">
+            <div class="rowL">
+              <div class="top">
+                ${flagImg(r.country)}
+                <span style="font-size:18px">${r.country || "Unknown"}</span>
+              </div>
+              <div class="bar"><div class="fill" style="width:${pct}%"></div></div>
+              <div class="cap"><strong>${fmtPct(pct)}</strong> of US$1,000,000</div>
+            </div>
+            <div class="right">
+              <div class="pill ${qualified ? "ok" : ""}">${qualified ? "Qualified" : "Pending"}</div>
+              <div class="pct">${fmtPct(pct)}</div>
+            </div>
+          </div>`;
+      }
+      html += `</div></div>`;
+      root.innerHTML = html;
+    }
+  } catch (e) {
+    console.error(e);
+    showError(e.message || e);
+  }
+</script>
+</body>
+</html>
